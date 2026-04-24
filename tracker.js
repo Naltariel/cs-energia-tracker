@@ -156,8 +156,19 @@ function mergeRecordPreservingData(existingRec, newRec) {
     if (key === "hourly" && Array.isArray(newVal)) {
       const totalLeads = newVal.reduce((s, h) => s + (parseInt(h.leads) || 0), 0);
       if (totalLeads > 5000) {
-        console.warn(`[MERGE] hourly scartato: somma lead ${totalLeads} > 5000 (probabile mese). Mantenuto hourly esistente.`);
-        return; // non sovrascrive merged.hourly
+        // Opus ha letto probabilmente lo screenshot MESE invece del giorno.
+        // Se esiste un hourly precedente buono → mantieni quello.
+        // Se non esiste (primo salvataggio) → lascia il nuovo valore con warning console,
+        //   così la tabella fasce orarie è comunque renderizzata (anche se con numeri mese).
+        if (Array.isArray(existingRec.hourly) && existingRec.hourly.length > 0) {
+          const existingTot = existingRec.hourly.reduce((s, h) => s + (parseInt(h.leads) || 0), 0);
+          if (existingTot > 0 && existingTot < 5000) {
+            console.warn(`[MERGE] hourly scartato: somma lead ${totalLeads} > 5000 (probabile mese). Mantenuto hourly esistente (${existingTot} lead).`);
+            return; // non sovrascrive merged.hourly
+          }
+        }
+        // Nessun hourly precedente buono: accetta con warning
+        console.warn(`[MERGE] hourly con somma ${totalLeads} > 5000 (probabile mese). Accettato perché non c'è hourly precedente; verifica i dati.`);
       }
       merged.hourly = newVal;
       return;
@@ -10316,7 +10327,63 @@ Rispondi SOLO con il JSON o "null", senza commenti, senza markdown.`;
       fontWeight: "bold",
       marginBottom: "14px"
     }
-  }, "\u2705 Dati estratti per il ", extracted.date, " \u2014 modifica se necessario e conferma:"), validationWarnings.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "\u2705 Dati estratti per il ", extracted.date, " \u2014 modifica se necessario e conferma:"), (() => {
+    const hourly = extracted.hourly;
+    const hourlyEmpty = !Array.isArray(hourly) || hourly.length === 0;
+    const hourlySum = hourlyEmpty ? 0 : hourly.reduce((s, h) => s + (parseInt(h.leads) || 0), 0);
+    const hourlySuspect = hourlySum > 5000;
+    if (hourlyEmpty) {
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          background: "rgba(255, 92, 92, 0.12)",
+          border: "1px solid rgba(255, 92, 92, 0.5)",
+          borderRadius: "8px",
+          padding: "12px 14px",
+          marginBottom: "12px",
+          fontFamily: FF
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          color: "#ff5c5c",
+          fontSize: "12px",
+          fontWeight: "bold",
+          marginBottom: "4px"
+        }
+      }, "\u26D4 Tabella fasce orarie NON estratta"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: "11px",
+          color: "#d8cfec",
+          lineHeight: "1.5"
+        }
+      }, "Il campo \"hourly\" \xE8 vuoto. Verifica di aver caricato lo screenshot \"KPI per data\" della Dashboard Marketing con ", /*#__PURE__*/React.createElement("strong", null, "filtro Date con date uguali"), " (giornaliero, non mese) + ", /*#__PURE__*/React.createElement("strong", null, "cluster Tutte"), ". Senza questo, il Report Giorno non avr\xE0 la tabella KPI per Fascia Oraria."));
+    }
+    if (hourlySuspect) {
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          background: "rgba(255, 92, 92, 0.12)",
+          border: "1px solid rgba(255, 92, 92, 0.5)",
+          borderRadius: "8px",
+          padding: "12px 14px",
+          marginBottom: "12px",
+          fontFamily: FF
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          color: "#ff5c5c",
+          fontSize: "12px",
+          fontWeight: "bold",
+          marginBottom: "4px"
+        }
+      }, "\u26D4 Fasce orarie SOSPETTE: somma lead ", hourlySum), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: "11px",
+          color: "#d8cfec",
+          lineHeight: "1.5"
+        }
+      }, "La somma dei lead orari \xE8 ", hourlySum, " (tipicamente 1500-3500 per un giorno). Opus ha probabilmente letto lo screen MESE invece del giornaliero. Verifica di aver caricato \"KPI per data\" con ", /*#__PURE__*/React.createElement("strong", null, "date uguali"), " (es. 23/04 \u2192 23/04) e non 01/04 \u2192 23/04. Se salvi, la tabella mostrer\xE0 valori errati."));
+    }
+    return null;
+  })(), validationWarnings.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       background: "rgba(245, 166, 35, 0.1)",
       border: "1px solid rgba(245, 166, 35, 0.4)",
@@ -13927,6 +13994,8 @@ function App() {
   const [activeReport, setActiveReport] = useState(SEED_SORTED[0]);
   const [reportEditCpaIdx, setReportEditCpaIdx] = useState(null);
   const [reportEditCpaVal, setReportEditCpaVal] = useState("");
+  const [reportEditHourly, setReportEditHourly] = useState(null); // { ora, field }
+  const [reportEditHourlyVal, setReportEditHourlyVal] = useState("");
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const [screens, setScreens] = useState([]);
@@ -15848,7 +15917,83 @@ Rispondi in italiano, in modo diretto e operativo. Se mancano dati, indica esatt
           fontWeight: "bold"
         }
       }, fv(r.cpa), "\u20AC")));
-    })(), r.hourly && r.hourly.length > 0 && (() => {
+    })(), (() => {
+      const hourlyIsEmpty = !r.hourly || !Array.isArray(r.hourly) || r.hourly.length === 0;
+      const totLeadsHourly = hourlyIsEmpty ? 0 : r.hourly.reduce((s, h) => s + (parseInt(h.leads) || 0), 0);
+      const outOfRange = totLeadsHourly > 5000;
+
+      // Banner warning se dati orari mancanti o sbagliati
+      const warningMsg = hourlyIsEmpty ? "⚠ Dati orari mancanti. Carica lo screenshot 'KPI per data' della Dashboard Marketing (Date uguali + cluster Tutte) e rifai l'estrazione." : outOfRange ? `⚠ Dati orari sospetti: somma lead ${totLeadsHourly} (tipicamente 1500-3500). Probabile lettura screen MESE invece di GIORNO.` : null;
+      if (hourlyIsEmpty) {
+        return /*#__PURE__*/React.createElement("div", {
+          style: {
+            background: CARD2,
+            border: "2px solid #664CCD44",
+            borderRadius: "12px",
+            overflow: "hidden",
+            marginTop: "20px",
+            marginBottom: "20px"
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            background: "linear-gradient(135deg,#2a1f5e,#1a1540)",
+            padding: "14px 20px",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center"
+          }
+        }, /*#__PURE__*/React.createElement("span", {
+          style: {
+            color: "#c4b8ff",
+            fontWeight: "bold",
+            fontSize: "12px",
+            fontFamily: FF
+          }
+        }, "\uD83D\uDCDE KPI per Fascia Oraria"), /*#__PURE__*/React.createElement("span", {
+          style: {
+            color: "#ff5c5c",
+            fontSize: "9px",
+            fontFamily: FF,
+            fontWeight: "bold"
+          }
+        }, "DATI MANCANTI")), /*#__PURE__*/React.createElement("div", {
+          style: {
+            padding: "32px 24px",
+            textAlign: "center"
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            background: "rgba(245, 166, 35, 0.12)",
+            border: "1px solid rgba(245, 166, 35, 0.5)",
+            borderRadius: "8px",
+            padding: "16px 20px",
+            display: "inline-block",
+            maxWidth: "600px"
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: "#f5a623",
+            fontSize: "12px",
+            fontFamily: FF,
+            fontWeight: "bold",
+            marginBottom: "8px"
+          }
+        }, "\u26A0 Tabella non compilata"), /*#__PURE__*/React.createElement("div", {
+          style: {
+            color: "#d8cfec",
+            fontSize: "11px",
+            fontFamily: FF,
+            lineHeight: "1.7"
+          }
+        }, "I dati orari non sono presenti nel record del ", r.date, ".", /*#__PURE__*/React.createElement("br", null), "Per popolare questa tabella: torna a ", /*#__PURE__*/React.createElement("strong", null, "+ Inserisci"), ", ricarica lo screenshot ", /*#__PURE__*/React.createElement("code", {
+          style: {
+            background: "#000",
+            padding: "2px 6px",
+            borderRadius: "3px",
+            color: "#c4b8ff"
+          }
+        }, "KPI per data"), " (Dashboard Marketing, filtro Date con date uguali, cluster Tutte) e rifai l'estrazione."))));
+      }
       const hRows = r.hourly.filter(h => h.leads > 0);
       const totLeads = parseInt(r.leadGen) || 0;
       const totLeadsU = hRows.reduce((s, h) => s + (h.leadsU || 0), 0);
@@ -15880,6 +16025,99 @@ Rispondi in italiano, in modo diretto e operativo. Se mancano dati, indica esatt
         const d = (actual - tobe) / tobe * 100;
         return d > 10 ? "#f5a623" : d < -10 ? "#ff5c5c" : "#4caf50";
       };
+
+      // Handler per edit cella fascia oraria
+      const startEditHourly = (ora, field, val) => {
+        setReportEditHourly({
+          ora,
+          field
+        });
+        setReportEditHourlyVal(val == null || val === "" ? "" : String(val).replace(".", ","));
+      };
+      const saveHourlyCell = async () => {
+        if (!reportEditHourly) return;
+        const {
+          ora,
+          field
+        } = reportEditHourly;
+        const cleaned = String(reportEditHourlyVal || "").trim().replace(",", ".");
+        if (cleaned === "") {
+          setReportEditHourly(null);
+          return;
+        }
+        const num = parseFloat(cleaned);
+        if (isNaN(num)) {
+          setReportEditHourly(null);
+          return;
+        }
+        // Aggiorno il record
+        const newHourly = r.hourly.map(h => {
+          if (h.ora !== ora) return h;
+          const updated = {
+            ...h
+          };
+          if (field === "leads" || field === "leadsU" || field === "timing") {
+            updated[field] = parseInt(num);
+          } else {
+            updated[field] = String(num).replace(".", ",");
+          }
+          return updated;
+        });
+        const updatedRecord = {
+          ...r,
+          hourly: newHourly
+        };
+        try {
+          const saveRes = await kvSaveRecord(updatedRecord);
+          if (!saveRes.ok) {
+            alert("Errore salvataggio: " + (saveRes.error || "sconosciuto"));
+            return;
+          }
+          const newRecords = records.map(x => x.id === r.id ? updatedRecord : x);
+          setRecords(newRecords);
+          setActiveReport(updatedRecord);
+          setReportEditHourly(null);
+        } catch (e) {
+          alert("Errore: " + (e.message || "sconosciuto"));
+        }
+      };
+      const isEditingCell = (ora, field) => reportEditHourly && reportEditHourly.ora === ora && reportEditHourly.field === field;
+      const editableCell = (ora, field, displayVal, style) => {
+        if (isEditingCell(ora, field)) {
+          return /*#__PURE__*/React.createElement("input", {
+            autoFocus: true,
+            value: reportEditHourlyVal,
+            onChange: e => setReportEditHourlyVal(e.target.value),
+            onKeyDown: e => {
+              if (e.key === "Enter") saveHourlyCell();
+              if (e.key === "Escape") setReportEditHourly(null);
+            },
+            onBlur: saveHourlyCell,
+            style: {
+              ...style,
+              background: P + "22",
+              border: "1px solid " + P + "66",
+              borderRadius: "3px",
+              color: "#fff",
+              padding: "2px 4px",
+              width: "50px",
+              textAlign: "center"
+            }
+          });
+        }
+        return /*#__PURE__*/React.createElement("span", {
+          onClick: () => startEditHourly(ora, field, displayVal),
+          title: "Click per modificare",
+          style: {
+            ...style,
+            cursor: "pointer",
+            padding: "2px 4px",
+            borderRadius: "3px"
+          },
+          onMouseEnter: e => e.currentTarget.style.background = P + "15",
+          onMouseLeave: e => e.currentTarget.style.background = "transparent"
+        }, displayVal);
+      };
       return /*#__PURE__*/React.createElement("div", {
         style: {
           background: CARD2,
@@ -15889,7 +16127,20 @@ Rispondi in italiano, in modo diretto e operativo. Se mancano dati, indica esatt
           marginTop: "20px",
           marginBottom: "20px"
         }
-      }, /*#__PURE__*/React.createElement("div", {
+      }, warningMsg && /*#__PURE__*/React.createElement("div", {
+        style: {
+          background: "rgba(245, 166, 35, 0.12)",
+          padding: "9px 14px",
+          borderBottom: "1px solid rgba(245, 166, 35, 0.3)"
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: "#f5a623",
+          fontSize: "11px",
+          fontFamily: FF,
+          fontWeight: "bold"
+        }
+      }, warningMsg)), /*#__PURE__*/React.createElement("div", {
         style: {
           background: "linear-gradient(135deg,#2a1f5e,#1a1540)",
           padding: "14px 20px",
@@ -15910,7 +16161,7 @@ Rispondi in italiano, in modo diretto e operativo. Se mancano dati, indica esatt
           fontSize: "9px",
           fontFamily: FF
         }
-      }, r.date, " \xB7 ", hRows.length, " fasce", hourlyToBe ? " · TO BE da 27/03" : "")), /*#__PURE__*/React.createElement("div", {
+      }, r.date, " \xB7 ", hRows.length, " fasce", hourlyToBe ? " · TO BE da 27/03" : "", " \xB7 click sui valori per modificare")), /*#__PURE__*/React.createElement("div", {
         style: {
           overflowX: "auto"
         }
@@ -15956,12 +16207,10 @@ Rispondi in italiano, in modo diretto e operativo. Se mancano dati, indica esatt
             color: O,
             fontWeight: "bold"
           }
-        }, h.ora, ":00"), /*#__PURE__*/React.createElement("span", {
-          style: {
-            ...cBase,
-            color: TX
-          }
-        }, h.leads), /*#__PURE__*/React.createElement("span", {
+        }, h.ora, ":00"), editableCell(h.ora, "leads", h.leads, {
+          ...cBase,
+          color: TX
+        }), /*#__PURE__*/React.createElement("span", {
           style: {
             ...cBase,
             color: MU
